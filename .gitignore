@@ -1,0 +1,17 @@
+# 磁碟映像（體積巨大且含私人資料）
+*.vhdx
+*.vhd
+Backup/
+
+# BitLocker 修復金鑰 — 絕不可提交
+BitLocker-Recovery-*.txt
+*Recovery*.txt
+
+# 執行記錄
+logs/
+*.log
+
+# 雜項 / 個人檔案
+新增 Text Document.txt
+.claude/session.md
+.claude/permissions.log

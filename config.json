@@ -1,0 +1,23 @@
+{
+  "_comment": "diskProtect 設定。每個 volume 會生成一個 VHDX,掛載成指定磁碟機代號,資料放在該磁碟下的同名資料夾內 (例如 J:\\Git)。",
+  "volumes": [
+    {
+      "name": "Git",
+      "vhdx": "D:\\Document\\diskProtect\\Git.vhdx",
+      "maxSizeGB": 250,
+      "driveLetter": "J",
+      "label": "Git",
+      "source": "D:\\Git",
+      "expectedDataGB": 104
+    },
+    {
+      "name": "Dev",
+      "vhdx": "D:\\Document\\diskProtect\\Dev.vhdx",
+      "maxSizeGB": 200,
+      "driveLetter": "G",
+      "label": "Dev",
+      "source": "D:\\Dev",
+      "expectedDataGB": 83
+    }
+  ]
+}
