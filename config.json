@@ -13,11 +13,11 @@
     {
       "name": "Dev",
       "vhdx": "D:\\Document\\diskProtect\\Dev.vhdx",
-      "maxSizeGB": 200,
+      "maxSizeGB": 50,
       "driveLetter": "G",
       "label": "Dev",
       "source": "D:\\Dev",
-      "expectedDataGB": 83
+      "expectedDataGB": 41
     }
   ]
 }

@@ -10,8 +10,10 @@
     安全閘:
       1. 目標代號必須已掛載,且背後是 'File Backed Virtual' 磁碟,並且正好是 config 裡那個 vhdx
       2. 該磁碟已經加密或正在加密 → 顯示狀態後中止,不重複操作
-      3. 修復金鑰目錄不可以位於該 vhdx 磁碟本身 (否則鎖上後就拿不到金鑰)
-      4. 修復金鑰寫入檔案後會讀回比對;失敗就把金鑰顯示在畫面上,並要求手動抄下
+      3. 修復金鑰保存方式在任何變更前先驗證 (與 Rotate-RecoveryKey.ps1 相同規則):
+           A. 隨身碟 (-RecoveryKeyDir):只接受卸除式磁碟,本機硬碟與網路磁碟一律拒絕
+           B. 只顯示在畫面上 (-ShowOnScreen):抄到紙上 / 密碼管理器,不寫任何檔案
+      4. 保存後驗證你真的持有金鑰 (A: 輸入第一組 6 位數;B: 完整輸入 48 位數)
 
     一定使用 -UsedSpaceOnly:動態擴充 vhdx 若整碟加密,檔案會膨脹到接近 maxSizeGB。
     不啟用自動解鎖 (自動解鎖會讓上鎖失去意義)。
@@ -20,27 +22,40 @@
     對應 config.json 的 volumes[].name。預設 Git。
 
 .PARAMETER RecoveryKeyDir
-    修復金鑰要存放的目錄 (建議放在 vhdx 以外的實體磁碟,例如 H:\diskProtect-keys)。
-    未指定時會在執行時詢問。
+    隨身碟上的目錄,例如 E:\diskProtect-keys。與 -ShowOnScreen 都未指定時會在執行時詢問。
+
+.PARAMETER ShowOnScreen
+    修復金鑰不存檔,只顯示在畫面上。
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File .\04-Enable-BitLocker.ps1
-    powershell -ExecutionPolicy Bypass -File .\04-Enable-BitLocker.ps1 -Name Git -RecoveryKeyDir H:\diskProtect-keys
+    powershell -ExecutionPolicy Bypass -File .\04-Enable-BitLocker.ps1 -Name Dev
+    powershell -ExecutionPolicy Bypass -File .\04-Enable-BitLocker.ps1 -Name Dev -ShowOnScreen
+    powershell -ExecutionPolicy Bypass -File .\04-Enable-BitLocker.ps1 -Name Dev -RecoveryKeyDir E:\diskProtect-keys
 #>
 [CmdletBinding()]
 param(
     [string]$Name = 'Git',
-    [string]$RecoveryKeyDir
+    [string]$RecoveryKeyDir,
+    [switch]$ShowOnScreen
 )
 
 $ErrorActionPreference = 'Stop'
+
+# 去掉使用者輸入路徑時多帶的引號/空白 (例如從檔案總管「複製路徑」會帶雙引號)
+function Get-CleanPath([string]$path) {
+    if (-not $path) { return $path }
+    return $path.Trim().Trim('"').Trim("'").Trim()
+}
 
 # --- 自動提權 ---
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "需要系統管理員權限,正在跳出 UAC 提權視窗..." -ForegroundColor Yellow
     $argLine = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Name `"$Name`""
-    if ($RecoveryKeyDir) { $argLine += " -RecoveryKeyDir `"$RecoveryKeyDir`"" }
+    # 結尾反斜線會把後面的引號跳脫掉 ("E:\keys\" -> E:\keys"),先去掉
+    $cleanDir = (Get-CleanPath $RecoveryKeyDir)
+    if ($cleanDir)     { $argLine += " -RecoveryKeyDir `"$($cleanDir.TrimEnd('\'))`"" }
+    if ($ShowOnScreen) { $argLine += " -ShowOnScreen" }
     Start-Process powershell -Verb RunAs -ArgumentList $argLine
     return
 }
@@ -98,19 +113,31 @@ try {
     Write-Host " 已用空間 : $usedGB GB (只加密已用空間,vhdx 檔大小大致不變)"
     Write-Host ""
 
-    # --- 安全閘 3:修復金鑰目錄 ---
-    if (-not $RecoveryKeyDir) {
-        Write-Host "修復金鑰是忘記密碼時唯一的救命繩,必須存放在這顆 vhdx 以外的地方。" -ForegroundColor Yellow
-        $RecoveryKeyDir = Read-Host "請輸入修復金鑰存放目錄 (例如 H:\diskProtect-keys)"
+    # --- 安全閘 3:決定修復金鑰保存方式並先驗證 (尚未做任何變更) ---
+    $RecoveryKeyDir = Get-CleanPath $RecoveryKeyDir
+    if (-not $RecoveryKeyDir -and -not $ShowOnScreen) {
+        Write-Host "修復金鑰是忘記密碼時唯一的救命繩,要怎麼保存?" -ForegroundColor Cyan
+        Write-Host "  1) 存到隨身碟 (請先插上)"
+        Write-Host "  2) 只顯示在畫面上,我自己抄到紙上 / 存進密碼管理器 (不寫任何檔案)"
+        switch ((Read-Host "請選 1 或 2").Trim()) {
+            '1'     { $RecoveryKeyDir = Get-CleanPath (Read-Host "隨身碟上的目錄 (例如 E:\diskProtect-keys)") }
+            '2'     { $ShowOnScreen = $true }
+            default { throw "未選擇保存方式,已中止 (未做任何變更)。" }
+        }
     }
-    if (-not $RecoveryKeyDir) { throw "未指定修復金鑰目錄,已中止。" }
-    $keyDrive = ([IO.Path]::GetPathRoot($RecoveryKeyDir)).TrimEnd('\').TrimEnd(':')
-    if ($keyDrive -ieq $letter) { throw "安全中止:修復金鑰不可以存放在 $mountPoint 本身 (鎖上後就拿不到了)。" }
-    $vhdxDrive = ([IO.Path]::GetPathRoot($vhdxPath)).TrimEnd('\').TrimEnd(':')
-    if ($keyDrive -ieq $vhdxDrive) {
-        Write-Host "⚠️  修復金鑰目錄和 vhdx 在同一顆 $vhdxDrive`: 上;這顆硬碟壞掉時會一起遺失。建議另外再抄一份。" -ForegroundColor Yellow
+    if (-not $ShowOnScreen) {
+        if (-not $RecoveryKeyDir) { throw "未指定隨身碟目錄,已中止 (未做任何變更)。" }
+        $root = [IO.Path]::GetPathRoot($RecoveryKeyDir)
+        if (-not $root -or $root -notmatch '^[A-Za-z]:\\?$') { throw "路徑格式不正確:'$RecoveryKeyDir' (應為像 E:\diskProtect-keys 的格式)。" }
+        $keyDrive = $root.Substring(0, 2).ToUpper()
+        $logical = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$keyDrive'"
+        if (-not $logical) { throw "找不到磁碟 $keyDrive (隨身碟插上了嗎?)。" }
+        if ($logical.DriveType -ne 2) {
+            $typeName = switch ($logical.DriveType) { 3 {'本機硬碟'} 4 {'網路磁碟'} default {"類型 $($logical.DriveType)"} }
+            throw "安全中止:$keyDrive 是$typeName,不是隨身碟。修復金鑰只能存到卸除式磁碟;沒有隨身碟的話請改用選項 2 (畫面顯示)。"
+        }
+        New-Item -ItemType Directory -Path $RecoveryKeyDir -Force | Out-Null
     }
-    New-Item -ItemType Directory -Path $RecoveryKeyDir -Force | Out-Null
 
     # --- 設定密碼 (BitLocker 至少 8 個字元) ---
     $password = $null
@@ -132,38 +159,67 @@ try {
 
     # --- 啟用:先建修復金鑰保護 (從第一刻起就有備援),再加上密碼保護 ---
     Write-Host "`n啟用 BitLocker (修復金鑰保護)..." -ForegroundColor Yellow
-    Enable-BitLocker -MountPoint $mountPoint -EncryptionMethod XtsAes256 -UsedSpaceOnly -RecoveryPasswordProtector | Out-Null
+    # 輸出與警告訊息都含金鑰明文,一律丟棄
+    Enable-BitLocker -MountPoint $mountPoint -EncryptionMethod XtsAes256 -UsedSpaceOnly -RecoveryPasswordProtector -WarningAction SilentlyContinue | Out-Null
 
     $recovery = (Get-BitLockerVolume -MountPoint $mountPoint).KeyProtector |
         Where-Object { $_.KeyProtectorType -eq 'RecoveryPassword' } | Select-Object -First 1
-    if (-not $recovery) { throw "啟用後找不到修復金鑰保護裝置,請執行 'manage-bde -protectors -get $mountPoint' 檢查。" }
+    if (-not $recovery) { throw "啟用後找不到修復金鑰保護裝置,請以系統管理員執行 '(Get-BitLockerVolume $mountPoint).KeyProtector | Select KeyProtectorType,KeyProtectorId' 檢查。" }
+    $recoveryKey = $recovery.RecoveryPassword
 
-    # --- 安全閘 4:寫入修復金鑰檔並讀回驗證 ---
-    $keyFile = Join-Path $RecoveryKeyDir "BitLocker-Recovery-$Name-$(Get-Date -Format 'yyyyMMdd-HHmmss').txt"
-    $keyText = @"
+    # --- 安全閘 4:保存修復金鑰並驗證你真的持有它 ---
+    $verified = $false
+    if ($ShowOnScreen) {
+        for ($round = 1; $round -le 3 -and -not $verified; $round++) {
+            Clear-Host
+            Write-Host "`n  ⚠️  請勿截圖 / 拍照上傳。抄到紙上或存進密碼管理器。`n" -ForegroundColor Yellow
+            Write-Host "  Volume     : $Name ($mountPoint)"
+            Write-Host "  金鑰識別碼 : $($recovery.KeyProtectorId)`n"
+            Write-Host "  修復金鑰   : $recoveryKey`n" -ForegroundColor Green
+            Read-Host "  抄好後按 Enter (畫面會被清除)" | Out-Null
+            Clear-Host
+            $typed = Read-Host "請完整輸入剛抄下的 48 位數修復金鑰 (可含或不含 -) [第 $round/3 次]"
+            if (($typed -replace '[^0-9]', '') -eq ($recoveryKey -replace '[^0-9]', '')) { $verified = $true }
+            else { Write-Host "  不符,可能抄錯了。按 Enter 重新顯示金鑰。" -ForegroundColor Red; Read-Host | Out-Null }
+        }
+        Clear-Host
+    } else {
+        $keyFile = Join-Path $RecoveryKeyDir "BitLocker-Recovery-$Name-$(Get-Date -Format 'yyyyMMdd-HHmmss').txt"
+        $keyText = @"
 diskProtect BitLocker 修復金鑰
 Volume      : $Name ($mountPoint)
 VHDX        : $vhdxPath
 建立時間    : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
 金鑰識別碼  : $($recovery.KeyProtectorId)
-修復金鑰    : $($recovery.RecoveryPassword)
+修復金鑰    : $recoveryKey
 
-用法 (忘記密碼時,先跑 Unlock.ps1 掛載,再於系統管理員 PowerShell 執行):
-  manage-bde -unlock $mountPoint -RecoveryPassword $($recovery.RecoveryPassword)
+用法 (忘記密碼時,先跑 Unlock.ps1 掛載,連續輸錯 3 次密碼後貼上此金鑰;或在系統管理員 PowerShell):
+  manage-bde -unlock $mountPoint -RecoveryPassword <上面的修復金鑰>
 "@
-    $keySaved = $false
-    try {
-        Set-Content -Path $keyFile -Value $keyText -Encoding UTF8
-        $keySaved = (Get-Content $keyFile -Raw) -match [regex]::Escape($recovery.RecoveryPassword)
-    } catch { $keySaved = $false }
+        $saved = $false
+        try {
+            Set-Content -Path $keyFile -Value $keyText -Encoding UTF8
+            $saved = (Get-Content $keyFile -Raw) -match [regex]::Escape($recoveryKey)
+        } catch { $saved = $false }
+        if ($saved) {
+            Write-Host "✅ 修復金鑰已存到:$keyFile (畫面上不顯示金鑰)" -ForegroundColor Green
+            $firstGroup = ($recoveryKey -split '-')[0]
+            for ($attempt = 1; $attempt -le 3 -and -not $verified; $attempt++) {
+                $typed = Read-Host "請打開上述檔案,輸入修復金鑰的「第一組 6 位數」以確認 (第 $attempt/3 次)"
+                if ($typed.Trim() -eq $firstGroup) { $verified = $true } else { Write-Host "  不符。" -ForegroundColor Red }
+            }
+        } else {
+            Write-Host "❌ 修復金鑰檔寫入/驗證失敗:$keyFile" -ForegroundColor Red
+        }
+    }
+    $recoveryKey = $null
 
-    if ($keySaved) {
-        Write-Host "✅ 修復金鑰已存到:$keyFile" -ForegroundColor Green
+    if ($verified) {
+        Write-Host "✅ 已確認你持有修復金鑰。" -ForegroundColor Green
     } else {
-        Write-Host "`n❌ 修復金鑰檔寫入/驗證失敗!請立刻手動抄下以下金鑰:" -ForegroundColor Red
-        Write-Host "   識別碼:$($recovery.KeyProtectorId)" -ForegroundColor Red
-        Write-Host "   金鑰  :$($recovery.RecoveryPassword)" -ForegroundColor Red
-        Read-Host "抄好後按 Enter 繼續"
+        # 此時磁碟仍是解鎖狀態,不會鎖死;密碼保護照樣加上,之後可用 Rotate-RecoveryKey.ps1 換一組新金鑰
+        Write-Host "⚠️  未確認修復金鑰已保存。加密與密碼保護會繼續,但請在上鎖前執行:" -ForegroundColor Yellow
+        Write-Host "   Rotate-RecoveryKey.ps1 -Name $Name -ShowOnScreen   (產生新金鑰並作廢這組)" -ForegroundColor Yellow
     }
 
     Write-Host "加入密碼保護..." -ForegroundColor Yellow

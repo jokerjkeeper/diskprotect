@@ -15,7 +15,7 @@
 - `source`：原始來源目錄(僅搬移時用)
 - `expectedDataGB`：搬移前空間檢查用
 
-目前:`Git → D:\Git.vhdx → J:`(已完成)、`Dev → D:\Dev.vhdx → G:`(待建)。
+目前:`Git → D:\Document\diskProtect\Git.vhdx → J:`(250G,已完成,BitLocker)、`Dev → D:\Document\diskProtect\Dev.vhdx → G:`(50G,2026-09-22 建立並搬移 D:\Dev)。
 
 ## 日常使用
 
